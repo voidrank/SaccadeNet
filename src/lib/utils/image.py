@@ -13,6 +13,8 @@ import numpy as np
 import cv2
 import random
 
+from IPython import embed
+
 def flip(img):
   return img[:, :, ::-1].copy()  
 
@@ -115,11 +117,40 @@ def gaussian_radius(det_size, min_overlap=0.7):
   return min(r1, r2, r3)
 
 
+def gaussian_radius_angle(shape, bin_size):
+    w, h = shape
+    right_angle = np.arctan2(h, w-1)
+    left_angle = np.arctan2(h-1, w)
+    middle_angle = np.arctan2(h, w)
+    radius = max(middle_angle - left_angle, right_angle - middle_angle)
+
+    radius = radius / bin_size
+
+    return radius
+
+
+def gaussian_radius_len(len, base):
+    middle = int(np.log(len) / np.log(base))
+    left = int(np.log(len * 0.7) / np.log(base))
+    right = int(np.log(len * 1.42) / np.log(base))
+
+    radius = max(right - middle, middle - left)
+    return radius
+
+
 def gaussian2D(shape, sigma=1):
     m, n = [(ss - 1.) / 2. for ss in shape]
     y, x = np.ogrid[-m:m+1,-n:n+1]
 
     h = np.exp(-(x * x + y * y) / (2 * sigma * sigma))
+    h[h < np.finfo(h.dtype).eps * h.max()] = 0
+    return h
+
+def gaussian1D(width, sigma=1):
+    n = (width - 1.) / 2.
+    x = np.ogrid[-n:n+1]
+
+    h = np.exp(-x*x / (2 * sigma * sigma))
     h[h < np.finfo(h.dtype).eps * h.max()] = 0
     return h
 
@@ -139,6 +170,32 @@ def draw_umich_gaussian(heatmap, center, radius, k=1):
   if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0: # TODO debug
     np.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
   return heatmap
+
+
+def draw_angle_gaussian_1D(heatmap, x, radius, size_angle_bin, k=1):
+  diameter = (2 * radius) // size_angle_bin + 1
+  gaussian = gaussian1D(diameter, sigma=diameter / 6)
+  left, right = min(x, radius), min(np.pi / 2 - x, radius)
+  left_bin, right_bin = int(left // size_angle_bin), int(right // size_angle_bin)
+  x_bin, radius_bin = int(x // size_angle_bin), int(radius // size_angle_bin)
+
+  masked_heatmap = heatmap[x_bin - left_bin : x_bin + right_bin]
+  masked_gaussian = gaussian[radius_bin - left_bin : radius_bin + right_bin]
+  if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0:
+      np.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
+  return heatmap
+
+
+def draw_len_gaussian_1D(heatmap, x, radius, num_len, k=1):
+    diameter = (2 * radius + 1)
+    gaussian = gaussian1D(diameter, sigma=diameter / 6)
+    left, right = int(min(x, radius)), int(min(num_len - x, radius))
+
+    masked_heatmap = heatmap[x - left : x + right]
+    masked_gaussian = gaussian[radius - left : radius + right]
+    if min(masked_gaussian.shape) > 0 and min(masked_heatmap.shape) > 0:
+        np.maximum(masked_heatmap, masked_gaussian * k, out=masked_heatmap)
+    return heatmap
 
 def draw_dense_reg(regmap, heatmap, center, value, radius, is_offset=False):
   diameter = 2 * radius + 1

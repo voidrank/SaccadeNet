@@ -21,7 +21,8 @@ class BaseDetector(object):
       opt.device = torch.device('cpu')
     
     print('Creating model...')
-    self.model = create_model(opt.arch, opt.heads, opt.head_conv)
+    self.model = create_model(opt.arch, opt.heads, opt.head_conv,
+                              opt)
     self.model = load_model(self.model, opt.load_model)
     self.model = self.model.to(opt.device)
     self.model.eval()
@@ -79,7 +80,7 @@ class BaseDetector(object):
   def show_results(self, debugger, image, results):
    raise NotImplementedError
 
-  def run(self, image_or_path_or_tensor, meta=None):
+  def run(self, image_or_path_or_tensor, meta=None, ann=None):
     load_time, pre_time, net_time, dec_time, post_time = 0, 0, 0, 0, 0
     merge_time, tot_time = 0, 0
     debugger = Debugger(dataset=self.opt.dataset, ipynb=(self.opt.debug==3),
@@ -99,6 +100,7 @@ class BaseDetector(object):
     load_time += (loaded_time - start_time)
     
     detections = []
+    box_fracs = []
     for scale in self.scales:
       scale_start_time = time.time()
       if not pre_processed:
@@ -112,8 +114,9 @@ class BaseDetector(object):
       torch.cuda.synchronize()
       pre_process_time = time.time()
       pre_time += pre_process_time - scale_start_time
-      
-      output, dets, forward_time = self.process(images, return_time=True)
+
+      ret = self.process(images, return_time=True, ann=ann)
+      output, dets, forward_time = ret[:3]
 
       torch.cuda.synchronize()
       net_time += forward_time - pre_process_time
@@ -139,6 +142,8 @@ class BaseDetector(object):
     if self.opt.debug >= 1:
       self.show_results(debugger, image, results)
     
-    return {'results': results, 'tot': tot_time, 'load': load_time,
+    ret = {'results': results, 'tot': tot_time, 'load': load_time,
             'pre': pre_time, 'net': net_time, 'dec': dec_time,
             'post': post_time, 'merge': merge_time}
+
+    return ret

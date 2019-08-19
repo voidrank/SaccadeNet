@@ -13,6 +13,7 @@ from __future__ import print_function
 import numpy as np
 import torch
 import torch.nn as nn
+from .aggatt import AggAtt
 
 class convolution(nn.Module):
     def __init__(self, k, inp_dim, out_dim, stride=1, with_bn=True):
@@ -183,7 +184,7 @@ class exkp(nn.Module):
         make_hg_layer=make_layer, make_hg_layer_revr=make_layer_revr,
         make_pool_layer=make_pool_layer, make_unpool_layer=make_unpool_layer,
         make_merge_layer=make_merge_layer, make_inter_layer=make_inter_layer, 
-        kp_layer=residual
+        kp_layer=residual, opt=None
     ):
         super(exkp, self).__init__()
 
@@ -247,6 +248,11 @@ class exkp(nn.Module):
                 ])
                 self.__setattr__(head, module)
 
+        self.opt = opt
+        if opt.use_agg_att:
+            self.agg_att = AggAtt(cnv_dim, curr_dim,
+                                stride=1, kernel_size=3, padding=1,
+                                final_channels=2)
 
         self.relu = nn.ReLU(inplace=True)
 
@@ -265,12 +271,16 @@ class exkp(nn.Module):
                 layer = self.__getattr__(head)[ind]
                 y = layer(cnv)
                 out[head] = y
-            
+
+            if self.opt.use_agg_att:
+                res_wh = self.agg_att(cnv, out['wh'])
+                out['final_wh'] = res_wh + out['wh'].detach()
             outs.append(out)
             if ind < self.nstack - 1:
                 inter = self.inters_[ind](inter) + self.cnvs_[ind](cnv)
                 inter = self.relu(inter)
                 inter = self.inters[ind](inter)
+
         return outs
 
 
@@ -281,7 +291,7 @@ def make_hg_layer(kernel, dim0, dim1, mod, layer=convolution, **kwargs):
 
 
 class HourglassNet(exkp):
-    def __init__(self, heads, num_stacks=2):
+    def __init__(self, heads, num_stacks=2, opt=None):
         n       = 5
         dims    = [256, 256, 384, 384, 384, 512]
         modules = [2, 2, 2, 2, 2, 4]
@@ -292,9 +302,10 @@ class HourglassNet(exkp):
             make_br_layer=None,
             make_pool_layer=make_pool_layer,
             make_hg_layer=make_hg_layer,
-            kp_layer=residual, cnv_dim=256
+            kp_layer=residual, cnv_dim=256,
+            opt=opt
         )
 
-def get_large_hourglass_net(num_layers, heads, head_conv):
-  model = HourglassNet(heads, 2)
+def get_large_hourglass_net(num_layers, heads, head_conv, opt):
+  model = HourglassNet(heads, 2, opt)
   return model

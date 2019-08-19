@@ -16,6 +16,7 @@ import logging
 import torch
 import torch.nn as nn
 from .DCNv2.dcn_v2 import DCN
+from .aggatt import AggAtt
 import torch.utils.model_zoo as model_zoo
 
 BN_MOMENTUM = 0.1
@@ -129,10 +130,11 @@ def fill_fc_weights(layers):
 
 class PoseResNet(nn.Module):
 
-    def __init__(self, block, layers, heads, head_conv):
+    def __init__(self, block, layers, heads, head_conv, opt):
         self.inplanes = 64
         self.heads = heads
         self.deconv_with_bias = False
+        self.opt = opt
 
         super(PoseResNet, self).__init__()
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
@@ -175,6 +177,18 @@ class PoseResNet(nn.Module):
                 else:
                     fill_fc_weights(fc)
             self.__setattr__(head, fc)
+
+        if opt.use_agg_att:
+            if opt.num_agg_att >= 1:
+                self.agg_att = AggAtt(64, head_conv,
+                                    stride=1, kernel_size=3, padding=1,
+                                    final_channels=2)
+            if opt.num_agg_att >= 2:
+                for i in range(1, opt.num_agg_att):
+                    agg_att = AggAtt(64, head_conv,
+                                       stride=1, kernel_size=3, padding=1,
+                                       final_channels=2)
+                    self.__setattr__('agg_att_{}'.format(i), agg_att)
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
@@ -260,6 +274,17 @@ class PoseResNet(nn.Module):
         ret = {}
         for head in self.heads:
             ret[head] = self.__getattr__(head)(x)
+        if self.opt.use_agg_att and self.opt.num_agg_att >= 1:
+            feat = x
+            agg_att_pred = self.agg_att(feat, ret['wh'])
+
+            final_wh = agg_att_pred[:,:2] + ret['wh'].detach()
+
+            for i in range(1, self.opt.num_agg_att):
+                agg_att_pred = self.__getattr__('agg_att_{}'.format(i))(feat, final_wh)
+                final_wh = agg_att_pred[:,:2]
+            ret['final_wh'] = final_wh
+
         return [ret]
 
     def init_weights(self, num_layers):
@@ -282,9 +307,8 @@ resnet_spec = {18: (BasicBlock, [2, 2, 2, 2]),
                152: (Bottleneck, [3, 8, 36, 3])}
 
 
-def get_pose_net(num_layers, heads, head_conv=256):
+def get_pose_net(num_layers, heads, head_conv=256, opt=None):
   block_class, layers = resnet_spec[num_layers]
-
-  model = PoseResNet(block_class, layers, heads, head_conv=head_conv)
+  model = PoseResNet(block_class, layers, heads, head_conv=head_conv, opt=opt)
   model.init_weights(num_layers)
   return model

@@ -10,7 +10,7 @@ from __future__ import print_function
 
 import torch
 import torch.nn as nn
-from .utils import _tranpose_and_gather_feat
+from .utils import _transpose_and_gather_feat, corners2ctwh
 import torch.nn.functional as F
 
 
@@ -66,6 +66,37 @@ def _neg_loss(pred, gt):
     loss = loss - (pos_loss + neg_loss) / num_pos
   return loss
 
+
+def _neg_loss_with_mask(pred, gt, mask):
+  ''' Modified focal loss. Exactly the same as CornerNet.
+      Runs faster and costs a little bit more memory
+    Arguments:
+      pred (batch x n x c)
+      gt_regr (batch x n x c)
+      mask (batch x n)
+  '''
+  pos_inds = gt.eq(1).float()
+  neg_inds = gt.lt(1).float()
+  mask_inds = mask.eq(1).float()
+
+  neg_weights = torch.pow((1 - gt) + (1 - mask_inds), 4)
+
+  loss = 0
+
+  pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds * mask_inds
+  neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds * mask_inds
+
+  num_pos  = (pos_inds * mask_inds).sum()
+  pos_loss = pos_loss.sum()
+  neg_loss = neg_loss.sum()
+
+  if num_pos == 0:
+    loss = loss - neg_loss
+  else:
+    loss = loss - (pos_loss + neg_loss) / num_pos
+  return loss
+
+
 def _not_faster_neg_loss(pred, gt):
     pos_inds = gt.eq(1).float()
     neg_inds = gt.lt(1).float()    
@@ -120,6 +151,45 @@ class FocalLoss(nn.Module):
   def forward(self, out, target):
     return self.neg_loss(out, target)
 
+
+class ClsLoss(nn.Module):
+    '''nn.Module warpper for cls loss'''
+    def __init__(self):
+        super(ClsLoss, self).__init__()
+        self.neg_loss = _neg_loss_with_mask
+
+    def forward(self, input, target, mask):
+        return self.neg_loss(input, target, mask)
+
+class DiagonalFocalLoss(nn.Module):
+  def __init__(self):
+    super(DiagonalFocalLoss, self).__init__()
+
+  def forward(self, output, mask, ind, target):
+    pred = _transpose_and_gather_feat(output, ind)
+    mask = mask.unsqueeze(2).expand_as(pred).float()
+    # loss = F.l1_loss(pred * mask, target * mask, reduction='elementwise_mean')
+    loss = _neg_loss_with_mask(pred, target, mask)
+    return loss
+
+class IoULoss(nn.Module):
+    def __init__(self):
+        super(IoULoss, self).__init__()
+
+    def forward(self, ious, output, mask, ind, target):
+        pred = _transpose_and_gather_feat(output, ind)
+        pred = pred.detach()
+        ious = _transpose_and_gather_feat(ious, ind)
+        target_min = torch.min(pred, target)
+        target_i = target_min[:,:,0] * target_min[:,:,1]
+        target_o = target[:,:,0] * target[:,:,1] + \
+                    pred[:,:,0] * pred[:,:,1] - \
+                    target_i
+        target_ious = (target_i / target_o + 1e-6).unsqueeze(2)
+        loss = _reg_loss(ious, target_ious, mask)
+        return loss
+
+
 class RegLoss(nn.Module):
   '''Regression loss for an output tensor
     Arguments:
@@ -132,18 +202,48 @@ class RegLoss(nn.Module):
     super(RegLoss, self).__init__()
   
   def forward(self, output, mask, ind, target):
-    pred = _tranpose_and_gather_feat(output, ind)
+    pred = _transpose_and_gather_feat(output, ind)
     loss = _reg_loss(pred, target, mask)
     return loss
+
+
+
+class CornerRegLoss(nn.Module):
+  def __init__(self):
+    super(CornerRegLoss, self).__init__()
+
+  def forward(self, res_corners, corners, mask, target):
+    centers, wh = corners2ctwh(res_corners + corners)
+
+    mask = mask.unsqueeze(2).float()
+    loss = F.l1_loss(res_corners * mask, target * mask, size_average=False)
+    loss = loss / (mask.sum() * 8 + 1e-4)
+
+    return loss, centers, wh
+
 
 class RegL1Loss(nn.Module):
   def __init__(self):
     super(RegL1Loss, self).__init__()
   
   def forward(self, output, mask, ind, target):
-    pred = _tranpose_and_gather_feat(output, ind)
+    pred = _transpose_and_gather_feat(output, ind)
     mask = mask.unsqueeze(2).expand_as(pred).float()
     # loss = F.l1_loss(pred * mask, target * mask, reduction='elementwise_mean')
+    loss = F.l1_loss(pred * mask, target * mask, size_average=False)
+    loss = loss / (mask.sum() + 1e-4)
+    return loss
+
+
+class RegL1DCNLoss(nn.Module):
+  def __init__(self):
+    super(RegL1DCNLoss, self).__init__()
+
+  def forward(self, output, mask, ind, target):
+    pred = _transpose_and_gather_feat(output, ind)
+    mask = mask.unsqueeze(2).expand_as(pred).float()
+    # loss = F.l1_loss(pred * mask, target * mask, reduction='elementwise_mean')
+    mask = mask * ((pred - target) < 1).float()
     loss = F.l1_loss(pred * mask, target * mask, size_average=False)
     loss = loss / (mask.sum() + 1e-4)
     return loss
@@ -153,7 +253,7 @@ class NormRegL1Loss(nn.Module):
     super(NormRegL1Loss, self).__init__()
   
   def forward(self, output, mask, ind, target):
-    pred = _tranpose_and_gather_feat(output, ind)
+    pred = _transpose_and_gather_feat(output, ind)
     mask = mask.unsqueeze(2).expand_as(pred).float()
     # loss = F.l1_loss(pred * mask, target * mask, reduction='elementwise_mean')
     pred = pred / (target + 1e-4)
@@ -167,7 +267,7 @@ class RegWeightedL1Loss(nn.Module):
     super(RegWeightedL1Loss, self).__init__()
   
   def forward(self, output, mask, ind, target):
-    pred = _tranpose_and_gather_feat(output, ind)
+    pred = _transpose_and_gather_feat(output, ind)
     mask = mask.float()
     # loss = F.l1_loss(pred * mask, target * mask, reduction='elementwise_mean')
     loss = F.l1_loss(pred * mask, target * mask, size_average=False)
@@ -179,7 +279,7 @@ class L1Loss(nn.Module):
     super(L1Loss, self).__init__()
   
   def forward(self, output, mask, ind, target):
-    pred = _tranpose_and_gather_feat(output, ind)
+    pred = _transpose_and_gather_feat(output, ind)
     mask = mask.unsqueeze(2).expand_as(pred).float()
     loss = F.l1_loss(pred * mask, target * mask, reduction='elementwise_mean')
     return loss
@@ -189,7 +289,7 @@ class BinRotLoss(nn.Module):
     super(BinRotLoss, self).__init__()
   
   def forward(self, output, mask, ind, rotbin, rotres):
-    pred = _tranpose_and_gather_feat(output, ind)
+    pred = _transpose_and_gather_feat(output, ind)
     loss = compute_rot_loss(pred, rotbin, rotres, mask)
     return loss
 

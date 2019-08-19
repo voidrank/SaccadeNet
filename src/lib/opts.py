@@ -6,12 +6,14 @@ import argparse
 import os
 import sys
 
+import numpy as np
+
 class opts(object):
   def __init__(self):
     self.parser = argparse.ArgumentParser()
     # basic experiment setting
-    self.parser.add_argument('task', default='ctdet',
-                             help='ctdet | ddd | multi_pose | exdet')
+    self.parser.add_argument('task', default='saccadedet',
+                             help='ctdet | ddd | multi_pose | exdet | evodet | edgedet | heatdet')
     self.parser.add_argument('--dataset', default='coco',
                              help='coco | kitti | coco_hp | pascal')
     self.parser.add_argument('--exp_id', default='default')
@@ -106,7 +108,7 @@ class opts(object):
     self.parser.add_argument('--nms', action='store_true',
                              help='run nms in testing.')
     self.parser.add_argument('--K', type=int, default=100,
-                             help='max number of output objects.') 
+                             help='max number of output objects.')
     self.parser.add_argument('--not_prefetch_test', action='store_true',
                              help='not use parallal data pre-processing.')
     self.parser.add_argument('--fix_res', action='store_true',
@@ -152,6 +154,7 @@ class opts(object):
     self.parser.add_argument('--mse_loss', action='store_true',
                              help='use mse loss or focal loss to train '
                                   'keypoint heatmaps.')
+
     # ctdet
     self.parser.add_argument('--reg_loss', default='l1',
                              help='regression loss: sl1 | l1 | l2')
@@ -161,6 +164,29 @@ class opts(object):
                              help='loss weight for keypoint local offsets.')
     self.parser.add_argument('--wh_weight', type=float, default=0.1,
                              help='loss weight for bounding box size.')
+    self.parser.add_argument('--ct_w_offset', type=float, default=0,
+                             help='prediction offset towards width.')
+    self.parser.add_argument('--ct_h_offset', type=float, default=0,
+                             help='prediction offset towards height.')
+
+    #  saccadedet
+    self.parser.add_argument('--not_agnostic_heat', action='store_true',
+                             help='Not use category agnostic extreme points.')
+    self.parser.add_argument('--not_use_agg_att', action='store_true',
+                             help='Not use corner convolution')
+    self.parser.add_argument('--use_agg_att_ctreg', action='store_true',
+                             help='Not use corner convolution')
+    self.parser.add_argument('--num_agg_att', type=int,
+                             default=1, help='#aggregation attentive modules')
+    self.parser.add_argument('--weight_final_wh_loss', type=np.float32, default=0.1,
+                             help='weight for final wh loss')
+    self.parser.add_argument('--weight_final_reg_loss', type=np.float32, default=1,
+                             help='weight for final reg loss')
+    self.parser.add_argument('--cor_att_weight', type=np.float32, default=4,
+                             help='weight for corner heatmap')
+    self.parser.add_argument('--aggatt_mode', type=str, default='v1',
+                             help='aggatt mode')
+
     # multi_pose
     self.parser.add_argument('--hp_weight', type=float, default=1,
                              help='loss weight for human pose offset.')
@@ -182,10 +208,37 @@ class opts(object):
     self.parser.add_argument('--dense_wh', action='store_true',
                              help='apply weighted regression near center or '
                                   'just apply regression on center point.')
+    self.parser.add_argument('--ct_reg_field', action='store_true',
+                             help='large scale regression')
+    self.parser.add_argument('--ct_reg_size', type=float, default=0.3,
+                             help="size of center regression field.")
+    self.parser.add_argument('--ms_pred', action='store_true',
+                             help='use different wh for different scales')
+    self.parser.add_argument('--ms_list', type=str, default='32,256,2048',
+                             help='list of different scale')
+    self.parser.add_argument('--ms_weight', type=float, default=1.0,
+                             help='loss weight for ms pred')
+
+    # evodet
+    self.parser.add_argument('--dense_select', type=str, default='AVERAGE',
+                             help='specify the method to assemble dense detection')
+    self.parser.add_argument('--dense_k', type=int, default=3,
+                             help='num of anchors used to assemble a '
+                                  'bounding box. (must be an odd num)')
     self.parser.add_argument('--cat_spec_wh', action='store_true',
                              help='category specific bounding box size.')
     self.parser.add_argument('--not_reg_offset', action='store_true',
                              help='not regress local offset.')
+    self.parser.add_argument('--center_rate', type=float, default=1,
+                             help='the rate we use to take the prediction'
+                                  'from the center points')
+    self.parser.add_argument('--dense_off_weight', type=float, default=1,
+                             help='loss weight for dense local offsets.')
+    self.parser.add_argument('--dense_wh_weight', type=float, default=0.1,
+                             help='loss weight for dense bounding box size.')
+    self.parser.add_argument('--stride', type=int, default=1,
+                             help='stride of dense selection')
+
     # exdet
     self.parser.add_argument('--agnostic_ex', action='store_true',
                              help='use category agnostic extreme points.')
@@ -235,6 +288,11 @@ class opts(object):
     opt.gpus = [i for i in range(len(opt.gpus))] if opt.gpus[0] >=0 else [-1]
     opt.lr_step = [int(i) for i in opt.lr_step.split(',')]
     opt.test_scales = [float(i) for i in opt.test_scales.split(',')]
+    opt.cor_dirs = np.array([[-1,-1], [1, -1], [-1, 1], [1, 1]])
+    opt.ms_list = np.array([float(scale) for scale in opt.ms_list.split(',')])
+
+    opt.use_agg_att = not opt.not_use_agg_att
+    opt.agnostic_heat = not opt.not_agnostic_heat
 
     opt.fix_res = not opt.keep_res
     print('Fix size testing.' if opt.fix_res else 'Keep resolution testing.')
@@ -246,6 +304,7 @@ class opts(object):
     if opt.head_conv == -1: # init default head_conv
       opt.head_conv = 256 if 'dla' in opt.arch else 64
     opt.pad = 127 if 'hourglass' in opt.arch else 31
+    opt.pad = 127 if 'efficient' in opt.arch else 31
     opt.num_stacks = 2 if opt.arch == 'hourglass' else 1
 
     if opt.trainval:
@@ -295,7 +354,7 @@ class opts(object):
     opt.output_w = opt.input_w // opt.down_ratio
     opt.input_res = max(opt.input_h, opt.input_w)
     opt.output_res = max(opt.output_h, opt.output_w)
-    
+
     if opt.task == 'exdet':
       # assert opt.dataset in ['coco']
       num_hm = 1 if opt.agnostic_ex else opt.num_classes
@@ -314,8 +373,12 @@ class opts(object):
         opt.heads.update({'reg': 2})
     elif opt.task == 'ctdet':
       # assert opt.dataset in ['pascal', 'coco']
-      opt.heads = {'hm': opt.num_classes,
-                   'wh': 2 if not opt.cat_spec_wh else 2 * opt.num_classes}
+      opt.heads = {'hm': opt.num_classes}
+      if opt.ms_pred:
+        opt.heads.update({'wh': 2 * (len(opt.ms_list) + 1)})
+        opt.heads.update({'ms': len(opt.ms_list) + 1})
+      else:
+        opt.heads.update({'wh': 2 if not opt.cat_spec_wh else 2 * opt.num_classes})
       if opt.reg_offset:
         opt.heads.update({'reg': 2})
     elif opt.task == 'multi_pose':
@@ -328,6 +391,17 @@ class opts(object):
         opt.heads.update({'hm_hp': 17})
       if opt.reg_hp_offset:
         opt.heads.update({'hp_offset': 2})
+    elif opt.task == 'saccadedet':
+      # assert opt.dataset in ['pascal', 'coco']
+      opt.cor_att_names = ['tl_hm', 'tr_hm', 'bl_hm', 'br_hm']
+      opt.agnostic_heat = not opt.not_agnostic_heat
+      num_corner_hm = 4 if opt.agnostic_heat else 4 * opt.num_classes
+      opt.heads = { 'wh': 2 if not opt.cat_spec_wh else 2 * opt.num_classes,
+                    'hm': opt.num_classes}
+      if opt.agnostic_heat:
+          opt.heads.update({'cor_att': num_corner_hm})
+      if opt.reg_offset:
+        opt.heads.update({'reg': 2})
     else:
       assert 0, 'task not defined!'
     print('heads', opt.heads)
@@ -335,7 +409,10 @@ class opts(object):
 
   def init(self, args=''):
     default_dataset_info = {
-      'ctdet': {'default_resolution': [512, 512], 'num_classes': 80, 
+      'evodet':{'default_resolution': [512,512], 'num_classes': 80,
+                'mean': [0.408, 0.447, 0.470], 'std': [0.289, 0.274, 0.278],
+                'dataset': 'coco'},
+      'ctdet': {'default_resolution': [512, 512], 'num_classes': 80,
                 'mean': [0.408, 0.447, 0.470], 'std': [0.289, 0.274, 0.278],
                 'dataset': 'coco'},
       'exdet': {'default_resolution': [512, 512], 'num_classes': 80, 

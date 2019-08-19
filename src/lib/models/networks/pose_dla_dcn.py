@@ -13,7 +13,9 @@ from torch import nn
 import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
 
+from .aggatt import AggAtt
 from .DCNv2.dcn_v2 import DCN
+
 
 BN_MOMENTUM = 0.1
 logger = logging.getLogger(__name__)
@@ -224,6 +226,7 @@ class Tree(nn.Module):
 class DLA(nn.Module):
     def __init__(self, levels, channels, num_classes=1000,
                  block=BasicBlock, residual_root=False, linear_root=False):
+
         super(DLA, self).__init__()
         self.channels = channels
         self.num_classes = num_classes
@@ -285,11 +288,12 @@ class DLA(nn.Module):
 
     def forward(self, x):
         y = []
+        att_y = []
         x = self.base_layer(x)
         for i in range(6):
             x = getattr(self, 'level{}'.format(i))(x)
             y.append(x)
-        return y
+        return y, att_y
 
     def load_pretrained_model(self, data='imagenet', name='dla34', hash='ba72cf86'):
         # fc = self.fc
@@ -302,7 +306,7 @@ class DLA(nn.Module):
         self.fc = nn.Conv2d(
             self.channels[-1], num_classes,
             kernel_size=1, stride=1, padding=0, bias=True)
-        self.load_state_dict(model_weights)
+        self.load_state_dict(model_weights, strict=False)
         # self.fc = fc
 
 
@@ -342,6 +346,22 @@ def fill_up_weights(up):
         w[c, 0, :, :] = w[0, 0, :, :]
 
 
+
+class Conv3x3(nn.Module):
+    def __init__(self, chi, cho):
+        super(Conv3x3, self).__init__()
+        self.actf = nn.Sequential(
+            nn.BatchNorm2d(cho, momentum=BN_MOMENTUM),
+            nn.ReLU(inplace=True)
+        )
+        self.conv = nn.Conv2d(chi, cho, kernel_size=3, stride=1,
+                     padding=1, bias=True)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.actf(x)
+        return x
+
 class DeformConv(nn.Module):
     def __init__(self, chi, cho):
         super(DeformConv, self).__init__()
@@ -349,12 +369,14 @@ class DeformConv(nn.Module):
             nn.BatchNorm2d(cho, momentum=BN_MOMENTUM),
             nn.ReLU(inplace=True)
         )
-        self.conv = DCN(chi, cho, kernel_size=(3,3), stride=1, padding=1, dilation=1, deformable_groups=1)
+        self.conv = DCN(chi, cho, kernel_size=(3,3), stride=1,
+                        padding=1, dilation=1, deformable_groups=1)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.actf(x)
         return x
+
 
 
 class IDAUp(nn.Module):
@@ -363,10 +385,10 @@ class IDAUp(nn.Module):
         super(IDAUp, self).__init__()
         for i in range(1, len(channels)):
             c = channels[i]
-            f = int(up_f[i])  
+            f = int(up_f[i])
             proj = DeformConv(c, o)
             node = DeformConv(o, o)
-     
+
             up = nn.ConvTranspose2d(o, o, f * 2, stride=f, 
                                     padding=f // 2, output_padding=0,
                                     groups=o, bias=False)
@@ -375,16 +397,24 @@ class IDAUp(nn.Module):
             setattr(self, 'proj_' + str(i), proj)
             setattr(self, 'up_' + str(i), up)
             setattr(self, 'node_' + str(i), node)
-                 
-        
+        #getattr(self, 'node_' + str(len(channels)-1)).register_backward_hook(ig)
+
+
     def forward(self, layers, startp, endp):
+        #offset_nodes = []
+        #offset_projs = []
+        out_layers = []
+        for i in range(startp+1):
+            out_layers.append(layers[i])
         for i in range(startp + 1, endp):
             upsample = getattr(self, 'up_' + str(i - startp))
             project = getattr(self, 'proj_' + str(i - startp))
-            layers[i] = upsample(project(layers[i]))
+            cur_layer = project(layers[i])
+            cur_layer = upsample(cur_layer)
             node = getattr(self, 'node_' + str(i - startp))
-            layers[i] = node(layers[i] + layers[i - 1])
-
+            cur_layer = node(cur_layer + out_layers[i - 1])
+            out_layers.append(cur_layer)
+        return out_layers
 
 
 class DLAUp(nn.Module):
@@ -404,13 +434,14 @@ class DLAUp(nn.Module):
             scales[j + 1:] = scales[j]
             in_channels[j + 1:] = [channels[j] for _ in channels[j + 1:]]
 
-    def forward(self, layers):
+    def forward(self, layers, seg_map=None):
         out = [layers[-1]] # start with 32
         for i in range(len(layers) - self.startp - 1):
             ida = getattr(self, 'ida_{}'.format(i))
-            ida(layers, len(layers) -i - 2, len(layers))
+            layers = ida(layers, len(layers) -i - 2, len(layers))
             out.insert(0, layers[-1])
         return out
+        #return out, offset_node_list, offset_proj_list
 
 
 class Interpolate(nn.Module):
@@ -424,36 +455,86 @@ class Interpolate(nn.Module):
         return x
 
 
+class SegHead(nn.Module):
+
+    def __init__(self, in_channel):
+        super(SegHead, self).__init__()
+        self.conv1 = Conv3x3(in_channel, 256)
+        self.conv2 = Conv3x3(256, 256)
+        self.pred = nn.Conv2d(256, 2, kernel_size=1, stride=1, padding=1, bias=True)
+        self.softmax = nn.Softmax()
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.pred(x)
+        x = self.softmax(x)
+        return x
+
+
+class LargeConvHM(nn.Module):
+
+    def __init__(self, num_input, num_hidden, num_output, num_span):
+        super(LargeConvHM, self).__init__()
+        self.num_input = num_input
+        self.num_hidden = num_hidden
+        self.num_output = num_output
+        self.num_span = num_span
+
+        self.convh = nn.Sequential(
+            nn.Conv2d(num_input, num_hidden,
+                      stride=1, kernel_size=(num_span, 1), padding=(num_span//2,0)),
+            nn.ReLU(),
+            nn.Conv2d(num_hidden, num_output,
+                      stride=1, kernel_size=(1, num_span), padding=(0,num_span//2)),
+        )
+
+        self.convw = nn.Sequential(
+            nn.Conv2d(num_input, num_hidden,
+                      stride=1, kernel_size=(1, num_span), padding=(0,num_span//2)),
+            nn.ReLU(),
+            nn.Conv2d(num_hidden, num_output,
+                      stride=1, kernel_size=(num_span, 1), padding=(num_span//2,0))
+        )
+
+    def forward(self, input):
+        return self.convh(input) + self.convw(input)
+
+
 class DLASeg(nn.Module):
+
     def __init__(self, base_name, heads, pretrained, down_ratio, final_kernel,
-                 last_level, head_conv, out_channel=0):
+                 last_level, head_conv, out_channel=0, opt=None):
         super(DLASeg, self).__init__()
         assert down_ratio in [2, 4, 8, 16]
         self.first_level = int(np.log2(down_ratio))
         self.last_level = last_level
         self.base = globals()[base_name](pretrained=pretrained)
+        self.opt = opt
+
         channels = self.base.channels
         scales = [2 ** i for i in range(len(channels[self.first_level:]))]
         self.dla_up = DLAUp(self.first_level, channels[self.first_level:], scales)
+
 
         if out_channel == 0:
             out_channel = channels[self.first_level]
 
         self.ida_up = IDAUp(out_channel, channels[self.first_level:self.last_level], 
                             [2 ** i for i in range(self.last_level - self.first_level)])
-        
+
         self.heads = heads
         for head in self.heads:
             classes = self.heads[head]
             if head_conv > 0:
               fc = nn.Sequential(
-                  nn.Conv2d(channels[self.first_level], head_conv,
-                    kernel_size=3, padding=1, bias=True),
-                  nn.ReLU(inplace=True),
-                  nn.Conv2d(head_conv, classes, 
-                    kernel_size=final_kernel, stride=1, 
-                    padding=final_kernel // 2, bias=True))
-              if 'hm' in head:
+                nn.Conv2d(channels[self.first_level], head_conv,
+                  stride=1, kernel_size=3, padding=1, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(head_conv, classes,
+                  kernel_size=final_kernel, stride=1,
+                  padding=final_kernel // 2, bias=True))
+              if 'hm' == head or 'cor_att' == head:
                 fc[-1].bias.data.fill_(-2.19)
               else:
                 fill_fc_weights(fc)
@@ -461,33 +542,55 @@ class DLASeg(nn.Module):
               fc = nn.Conv2d(channels[self.first_level], classes, 
                   kernel_size=final_kernel, stride=1, 
                   padding=final_kernel // 2, bias=True)
-              if 'hm' in head:
+              if 'hm' in head or 'att' in head:
                 fc.bias.data.fill_(-2.19)
               else:
                 fill_fc_weights(fc)
             self.__setattr__(head, fc)
 
-    def forward(self, x):
-        x = self.base(x)
-        x = self.dla_up(x)
+        if opt.use_agg_att:
+            input_channels = channels[self.first_level]
+            final_channels = 2
+            if self.opt.use_agg_att_ctreg:
+                final_channels += 2
+            self.agg_att = AggAtt(input_channels, head_conv,
+                                stride=1, kernel_size=3, padding=1,
+                                final_channels=final_channels)
 
+    def forward(self, x):
+        x, att_x = self.base(x)
+        shapes = [(f.shape[2], f.shape[3]) for f in x]
+
+        z = {}
+
+        x = self.dla_up(x)
         y = []
         for i in range(self.last_level - self.first_level):
             y.append(x[i].clone())
-        self.ida_up(y, 0, len(y))
+        y = self.ida_up(y, 0, len(y))
 
-        z = {}
         for head in self.heads:
             z[head] = self.__getattr__(head)(y[-1])
+
+        if self.opt.use_agg_att:
+            feat = y[-1]
+            agg_att = self.agg_att(feat, z['wh'])
+            z['final_wh'] = agg_att[:,:2] + z['wh'].detach()
+
+            if self.opt.use_agg_att_ctreg:
+                z['final_reg'] = agg_att[:,2:4] + z['reg'].detach()
+
         return [z]
     
 
-def get_pose_net(num_layers, heads, head_conv=256, down_ratio=4):
+def get_pose_net(num_layers, heads, head_conv=256, down_ratio=4, opt=None):
+
   model = DLASeg('dla{}'.format(num_layers), heads,
                  pretrained=True,
                  down_ratio=down_ratio,
                  final_kernel=1,
                  last_level=5,
-                 head_conv=head_conv)
+                 head_conv=head_conv,
+                 opt=opt)
   return model
 

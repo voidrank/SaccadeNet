@@ -5,7 +5,12 @@ from __future__ import print_function
 from .sample.ddd import DddDataset
 from .sample.exdet import EXDetDataset
 from .sample.ctdet import CTDetDataset
+from .sample.evodet import EvoDetDataset
+from .sample.heatdet import HeatDetDataset
+from .sample.edgedet import EdgeDetDataset
+from .sample.diagonaldet import DiagonalDetDataset
 from .sample.multi_pose import MultiPoseDataset
+from .sample.saccadedet import SaccadeDetDataset
 
 from .dataset.coco import COCO
 from .dataset.pascal import PascalVOC
@@ -23,8 +28,13 @@ dataset_factory = {
 _sample_factory = {
   'exdet': EXDetDataset,
   'ctdet': CTDetDataset,
+  'evodet': EvoDetDataset,
+  'edgedet': EdgeDetDataset,
   'ddd': DddDataset,
-  'multi_pose': MultiPoseDataset
+  'heatdet': HeatDetDataset,
+  'multi_pose': MultiPoseDataset,
+  'diagonaldet': DiagonalDetDataset,
+  'saccadedet': SaccadeDetDataset
 }
 
 

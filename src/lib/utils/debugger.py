@@ -113,7 +113,26 @@ class Debugger(object):
     return color_map
     '''
 
-  
+  def gen_heatmap(self, img, output_res=None):
+    img = img.copy()
+    c, h, w = img.shape[0], img.shape[1], img.shape[2]
+    if output_res is None:
+      output_res = (h * self.down_ratio, w * self.down_ratio)
+    img = img.reshape(h, w)
+    minimum, maximum = img.min(), img.max()
+    img = (img - minimum) / (maximum - minimum)
+    heatmap = np.zeros((h, w, 3))
+    heatmap[:,:,2] = 255 * (1 - img)
+    heatmap[:,:,1] = 255 * img
+    heatmap = heatmap * img[...,np.newaxis]
+    #heatmap[:,:,0] = 255 - heatmap[:,:,1] - heatmap[:,:,2]
+    heatmap[heatmap < 0] = 0
+    color_map = cv2.resize(heatmap, (output_res[0], output_res[1]))
+
+    return heatmap
+
+
+
   def gen_colormap(self, img, output_res=None):
     img = img.copy()
     c, h, w = img.shape[0], img.shape[1], img.shape[2]

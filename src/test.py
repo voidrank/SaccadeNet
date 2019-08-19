@@ -5,6 +5,7 @@ from __future__ import print_function
 import _init_paths
 
 import os
+import pickle
 import json
 import cv2
 import numpy as np
@@ -16,8 +17,10 @@ from external.nms import soft_nms
 from opts import opts
 from logger import Logger
 from utils.utils import AverageMeter
-from datasets.dataset_factory import dataset_factory
+from datasets.dataset_factory import dataset_factory, get_dataset
 from detectors.detector_factory import detector_factory
+
+from IPython import embed
 
 class PrefetchDataset(torch.utils.data.Dataset):
   def __init__(self, opt, dataset, pre_process_func):
@@ -82,12 +85,12 @@ def prefetch_test(opt):
 def test(opt):
   os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpus_str
 
-  Dataset = dataset_factory[opt.dataset]
+  Dataset = dataset_factory[opt.task]
   opt = opts().update_dataset_info_and_set_heads(opt, Dataset)
   print(opt)
   Logger(opt)
   Detector = detector_factory[opt.task]
-  
+
   split = 'val' if not opt.trainval else 'test'
   dataset = Dataset(opt, split)
   detector = Detector(opt)
@@ -97,6 +100,9 @@ def test(opt):
   bar = Bar('{}'.format(opt.exp_id), max=num_iters)
   time_stats = ['tot', 'load', 'pre', 'net', 'dec', 'post', 'merge']
   avg_time_stats = {t: AverageMeter() for t in time_stats}
+
+
+
   for ind in range(num_iters):
     img_id = dataset.images[ind]
     img_info = dataset.coco.loadImgs(ids=[img_id])[0]
@@ -106,7 +112,7 @@ def test(opt):
       ret = detector.run(img_path, img_info['calib'])
     else:
       ret = detector.run(img_path)
-    
+
     results[img_id] = ret['results']
 
     Bar.suffix = '[{0}/{1}]|Tot: {total:} |ETA: {eta:} '.format(

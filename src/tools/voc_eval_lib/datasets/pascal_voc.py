@@ -219,7 +219,7 @@ class pascal_voc(imdb):
                            dets[k, 0] + 1, dets[k, 1] + 1,
                            dets[k, 2] + 1, dets[k, 3] + 1))
 
-  def _do_python_eval(self, output_dir=None):
+  def _do_python_eval(self, output_dir=None, threshold=0.5):
     annopath = os.path.join(
       self._devkit_path,
       'VOC' + self._year,
@@ -282,9 +282,9 @@ class pascal_voc(imdb):
     print(('Running:\n{}'.format(cmd)))
     status = subprocess.call(cmd, shell=True)
 
-  def evaluate_detections(self, all_boxes, output_dir=None):
+  def evaluate_detections(self, all_boxes, output_dir=None, threshold=0.5):
     self._write_voc_results_file(all_boxes)
-    self._do_python_eval(output_dir)
+    self._do_python_eval(output_dir, threshold=threshold)
     if self.config['matlab_eval']:
       self._do_matlab_eval(output_dir)
     if self.config['cleanup']:

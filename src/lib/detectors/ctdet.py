@@ -10,21 +10,27 @@ import torch
 
 from external.nms import soft_nms
 from models.decode import ctdet_decode
-from models.utils import flip_tensor
+from models.utils import flip_tensor, _transpose_and_gather_feat
 from utils.image import get_affine_transform
 from utils.post_process import ctdet_post_process
 from utils.debugger import Debugger
 
 from .base_detector import BaseDetector
 
+
 class CtdetDetector(BaseDetector):
   def __init__(self, opt):
     super(CtdetDetector, self).__init__(opt)
-  
-  def process(self, images, return_time=False):
+
+  def process(self, images, return_time=False, ann=None):
     with torch.no_grad():
+
       output = self.model(images)[-1]
       hm = output['hm'].sigmoid_()
+      if self.opt.ms_pred:
+        ms = output['ms'].softmax(1)
+      else:
+        ms = None
       wh = output['wh']
       reg = output['reg'] if self.opt.reg_offset else None
       if self.opt.flip_test:
@@ -33,12 +39,16 @@ class CtdetDetector(BaseDetector):
         reg = reg[0:1] if reg is not None else None
       torch.cuda.synchronize()
       forward_time = time.time()
-      dets = ctdet_decode(hm, wh, reg=reg, K=self.opt.K)
-      
+      dets = ctdet_decode(hm, wh, reg=reg, ms=ms, opt=self.opt)
+
+
+    ret = [output, dets]
     if return_time:
-      return output, dets, forward_time
+      ret.append(forward_time)
     else:
-      return output, dets
+      ret.append(None)
+
+    return ret
 
   def post_process(self, dets, meta, scale=1):
     dets = dets.detach().cpu().numpy()
@@ -76,6 +86,7 @@ class CtdetDetector(BaseDetector):
       img = ((img * self.std + self.mean) * 255).astype(np.uint8)
       pred = debugger.gen_colormap(output['hm'][i].detach().cpu().numpy())
       debugger.add_blend_img(img, pred, 'pred_hm_{:.1f}'.format(scale))
+
       debugger.add_img(img, img_id='out_pred_{:.1f}'.format(scale))
       for k in range(len(dets[i])):
         if detection[i, k, 4] > self.opt.center_thresh:

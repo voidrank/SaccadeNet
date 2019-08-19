@@ -29,7 +29,8 @@ def main(opt):
   opt.device = torch.device('cuda' if opt.gpus[0] >= 0 else 'cpu')
   
   print('Creating model...')
-  model = create_model(opt.arch, opt.heads, opt.head_conv)
+  model = create_model(opt.arch, opt.heads, opt.head_conv,
+                       opt)
   optimizer = torch.optim.Adam(model.parameters(), opt.lr)
   start_epoch = 0
   if opt.load_model != '':
@@ -54,8 +55,10 @@ def main(opt):
     val_loader.dataset.run_eval(preds, opt.save_dir)
     return
 
+  split = 'trainval' if opt.trainval else 'train'
+
   train_loader = torch.utils.data.DataLoader(
-      Dataset(opt, 'train'), 
+      Dataset(opt, split),
       batch_size=opt.batch_size, 
       shuffle=True,
       num_workers=opt.num_workers,
@@ -84,8 +87,7 @@ def main(opt):
         best = log_dict_val[opt.metric]
         save_model(os.path.join(opt.save_dir, 'model_best.pth'), 
                    epoch, model)
-    else:
-      save_model(os.path.join(opt.save_dir, 'model_last.pth'), 
+    save_model(os.path.join(opt.save_dir, 'model_last.pth'),
                  epoch, model, optimizer)
     logger.write('\n')
     if epoch in opt.lr_step:

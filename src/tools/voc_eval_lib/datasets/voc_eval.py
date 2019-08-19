@@ -11,6 +11,8 @@ import xml.etree.ElementTree as ET
 import os
 import pickle
 import numpy as np
+from copy import deepcopy
+from IPython import embed
 
 def parse_rec(filename):
   """ Parse a PASCAL VOC xml file """
@@ -132,13 +134,25 @@ def voc_eval(detpath,
   # extract gt objects for this class
   class_recs = {}
   npos = 0
+
+  def calarea(obj, low, high):
+    bbox = obj['bbox']
+    area = (bbox[3] - bbox[1]) * (bbox[2] - bbox[0])
+    return (area < high) and (area > low)
   for imagename in imagenames:
     R = [obj for obj in recs[imagename] if obj['name'] == classname]
-    bbox = np.array([x['bbox'] for x in R])
+    # the following code is used
+    # for AP of objects of different size
+    #begin
+    R = [obj for obj in recs[imagename] if obj['name'] == classname and calarea(obj, 128**2, 10000**2)]
+    #R = [obj for obj in recs[imagename] if obj['name'] == classname and calarea(obj, 64**2, 128**2)]
+    #R = [obj for obj in recs[imagename] if obj['name'] == classname and calarea(obj, 0, 64**2)]
+    #end
     if use_diff:
       difficult = np.array([False for x in R]).astype(np.bool)
     else:
       difficult = np.array([x['difficult'] for x in R]).astype(np.bool)
+    bbox = np.array([x['bbox'] for x in R])
     det = [False] * len(R)
     npos = npos + sum(~difficult)
     class_recs[imagename] = {'bbox': bbox,
@@ -172,6 +186,13 @@ def voc_eval(detpath,
       bb = BB[d, :].astype(float)
       ovmax = -np.inf
       BBGT = R['bbox'].astype(float)
+
+      # the following code is used
+      # for AP of objects of different size
+      # begin
+      if BBGT.size == 0:
+        continue
+      # end
 
       if BBGT.size > 0:
         # compute overlaps

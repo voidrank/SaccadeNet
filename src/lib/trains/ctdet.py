@@ -14,6 +14,8 @@ from utils.post_process import ctdet_post_process
 from utils.oracle_utils import gen_oracle_map
 from .base_trainer import BaseTrainer
 
+from IPython import embed
+
 class CtdetLoss(torch.nn.Module):
   def __init__(self, opt):
     super(CtdetLoss, self).__init__()
@@ -30,6 +32,8 @@ class CtdetLoss(torch.nn.Module):
     hm_loss, wh_loss, off_loss = 0, 0, 0
     for s in range(opt.num_stacks):
       output = outputs[s]
+      if opt.loghw:
+        batch['wh'] = torch.log(batch['wh'] + 1e-9)
       if not opt.mse_loss:
         output['hm'] = _sigmoid(output['hm'])
 
@@ -87,7 +91,7 @@ class CtdetTrainer(BaseTrainer):
     reg = output['reg'] if opt.reg_offset else None
     dets = ctdet_decode(
       output['hm'], output['wh'], reg=reg,
-      cat_spec_wh=opt.cat_spec_wh, K=opt.K)
+      cat_spec_wh=opt.cat_spec_wh, K=opt.K, opt=opt)
     dets = dets.detach().cpu().numpy().reshape(1, -1, dets.shape[2])
     dets[:, :, :4] *= opt.down_ratio
     dets_gt = batch['meta']['gt_det'].numpy().reshape(1, -1, dets.shape[2])
