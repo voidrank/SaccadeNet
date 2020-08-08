@@ -1,7 +1,10 @@
 # SaccadeNet
 
+The official implementation of *SaccadeNet: A Fast and Accurate Object Detector* accepted by the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) 2020
 
 ![](readme/arch.png)
+
+*[Arxiv Link](https://arxiv.org/pdf/2003.12125.pdf)*
     
 
 ## Abstract 
@@ -70,10 +73,10 @@ We provide scripts for all the experiments in the [experiments](experiments) fol
 
 ## Citation
 
-@InProceedings{Lan_2020_CVPR,
-author = {Lan, Shiyi and Ren, Zhou and Wu, Yi and Davis, Larry S. and Hua, Gang},
-title = {SaccadeNet: A Fast and Accurate Object Detector},
-booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-month = {June},
-year = {2020}
-}
+    @InProceedings{Lan_2020_CVPR,
+    author = {Lan, Shiyi and Ren, Zhou and Wu, Yi and Davis, Larry S. and Hua, Gang},
+    title = {SaccadeNet: A Fast and Accurate Object Detector},
+    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+    month = {June},
+    year = {2020}
+    }
