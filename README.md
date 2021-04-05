@@ -20,6 +20,15 @@ Object detection is an essential step towards holistic scene understanding. Most
 |DLA-34        | 38.5 / 40.4 | 40.4 / 28  | 
 |ResNet-18     | 30.5 / 118 | 32.5 / 67    | 
 
+### Reproduced with the released code.
+
+| Backbone     |   Flip AP    |  Flip AP@0.5 | Flip AP@0.75 | Flip AP@small | Flip AP@medium | Flip AP@large |
+|--------------|--------------|--------------|--------------|--------------|--------------|--------------|
+|DLA-34        |  42.1        |     59.7     |      45.0    |    22.8      | 44.9         | 59.6 |
+
+[weights for coco_dla_2x_aggattv2](https://drive.google.com/file/d/1W3lfVA_fWRYOGr6sNfVNdoFQCqmthyeU/view?usp=sharing)
+
+
 ## Installation
 
 Please refer to [INSTALL.md](readme/INSTALL.md) for installation instructions.
